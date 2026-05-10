@@ -1319,10 +1319,7 @@ export default function App() {
               const sw = Math.max(1.5, 5 - n.depth * 1.2);
               // Show resolved question on edge
               const edgeLabel = n.resolvedQuestion || n.question;
-              const words =
-                edgeLabel.split(" ").slice(0, 7).join(" ") +
-                (edgeLabel.split(" ").length > 7 ? "…" : "");
-              const lw = Math.min(Math.max(words.length * 6, 80), 200);
+              const lw = Math.min(Math.max(edgeLabel.length * 6, 80), 320);
               return (
                 <g key={"eg-" + n.id}>
                   <path
@@ -1338,7 +1335,7 @@ export default function App() {
                     x={mid.x - lw / 2}
                     y={mid.y - 14}
                     width={lw}
-                    height={56}
+                    height={200}
                     style={{ overflow: "visible" }}
                   >
                     <div
@@ -1350,14 +1347,15 @@ export default function App() {
                         fontSize: 10,
                         fontFamily: "Nunito,sans-serif",
                         fontWeight: 700,
-                        padding: "2px 7px",
+                        padding: "4px 8px",
                         textAlign: "center",
-                        lineHeight: 1.5,
+                        lineHeight: 1.6,
                         wordBreak: "break-word",
+                        whiteSpace: "normal",
                         boxShadow: `0 2px 8px ${c}33`,
                       }}
                     >
-                      {words}
+                      {edgeLabel}
                     </div>
                   </foreignObject>
                 </g>
