@@ -451,6 +451,7 @@ function QANode({
   onOpenModal,
 }) {
   const [draft, setDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const c = col(node.depth);
   const lc = light(node.depth);
   const isRoot = node.depth === 0;
@@ -735,11 +736,11 @@ function QANode({
       )}
 
       {/* delete */}
-      {!isRoot && (
+      {!isRoot && !confirmDelete && (
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onDelete(node.id);
+            setConfirmDelete(true);
           }}
           style={{
             position: "absolute",
@@ -762,6 +763,71 @@ function QANode({
         >
           ✕
         </button>
+      )}
+
+      {/* delete confirmation */}
+      {!isRoot && confirmDelete && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: -9,
+            right: -9,
+            zIndex: 40,
+            background: "#fff",
+            border: `2px solid ${c}`,
+            borderRadius: 12,
+            padding: "10px 14px",
+            boxShadow: `0 4px 20px ${c}44`,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            minWidth: 160,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", fontFamily: "Nunito,sans-serif" }}>
+            Delete this branch?
+          </div>
+          <div style={{ fontSize: 11, color: "#888", fontFamily: "Nunito,sans-serif", lineHeight: 1.4 }}>
+            All child nodes will also be removed.
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              style={{
+                flex: 1,
+                background: "#f5f3ff",
+                color: "#7c3aed",
+                border: "1.5px solid #ede9fe",
+                borderRadius: 7,
+                fontFamily: "Nunito,sans-serif",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "5px 0",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onDelete(node.id)}
+              style={{
+                flex: 1,
+                background: "#dc2626",
+                color: "#fff",
+                border: "none",
+                borderRadius: 7,
+                fontFamily: "Nunito,sans-serif",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "5px 0",
+                cursor: "pointer",
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
