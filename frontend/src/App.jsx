@@ -558,6 +558,9 @@ function QANode({
           background: "#fff",
           borderLeft: `3px solid ${c}`,
           borderRight: `3px solid ${c}`,
+          ...(node.loading || node.error || !node.answer
+            ? { borderBottom: `3px solid ${c}`, borderRadius: "0 0 14px 14px" }
+            : {}),
           padding: "10px 14px",
           minHeight: 60,
         }}
@@ -695,6 +698,7 @@ function QANode({
             placeholder="Ask a follow-up…"
             style={{
               flex: 1,
+              minWidth: 0,
               background: "#fff",
               border: `1.5px solid ${c}44`,
               color: "#1a1a2e",
