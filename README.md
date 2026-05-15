@@ -3,6 +3,8 @@
 A Q&A-driven idea map. Each node shows your question and Claude's answer.
 Branch from any node to go deeper — the full ancestor chain becomes context for every new question.
 
+![Usage](./usage.png)
+
 ## Structure
 
 ```

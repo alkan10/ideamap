@@ -67,6 +67,54 @@ function layoutChildren(nodes, parentId) {
   });
 }
 
+function circularLayout(nodes) {
+  const updated = { ...nodes };
+  function arrange(nodeId) {
+    const node = updated[nodeId];
+    if (!node || !node.children.length) return;
+    const N = node.children.length;
+    const r = Math.max(300, N * 90);
+
+    if (!node.parentId) {
+      // Root: full 360° CCW, first branch at 0° (right)
+      node.children.forEach((cid, i) => {
+        const angle = (2 * Math.PI * i) / N;
+        updated[cid] = {
+          ...updated[cid],
+          x: node.x + r * Math.cos(angle),
+          y: node.y - r * Math.sin(angle),
+        };
+        arrange(cid);
+      });
+    } else {
+      // Non-root: fan out on the away-from-parent side only
+      const parent = updated[node.parentId];
+      // Direction from parent → this node in math coords (y-up)
+      const baseAngle = Math.atan2(
+        -(node.y - parent.y),
+        node.x - parent.x,
+      );
+      // Arc capped at 180° so children stay on one side
+      const spread = N === 1 ? 0 : Math.min(Math.PI, N * (Math.PI / 4));
+      node.children.forEach((cid, i) => {
+        const angle =
+          N === 1
+            ? baseAngle
+            : baseAngle + spread * (i / (N - 1) - 0.5);
+        updated[cid] = {
+          ...updated[cid],
+          x: node.x + r * Math.cos(angle),
+          y: node.y - r * Math.sin(angle),
+        };
+        arrange(cid);
+      });
+    }
+  }
+  const root = Object.values(nodes).find((n) => n.depth === 0);
+  if (root) arrange(root.id);
+  return updated;
+}
+
 function removeSubtree(nodes, id) {
   (nodes[id]?.children || []).forEach((c) => removeSubtree(nodes, c));
   delete nodes[id];
@@ -443,7 +491,9 @@ function SettingsPanel({ cfg, onChange, onClose }) {
 function QANode({
   node,
   selected,
+  isMultiSelected,
   onSelect,
+  onMultiSelect,
   onStartDrag,
   onAddChild,
   onDelete,
@@ -455,6 +505,7 @@ function QANode({
   const c = col(node.depth);
   const lc = light(node.depth);
   const isRoot = node.depth === 0;
+  const isMerge = node.parentIds && node.parentIds.length > 1;
   const preview =
     node.answer && node.answer.length > ANSWER_PREVIEW
       ? node.answer.slice(0, ANSWER_PREVIEW).trimEnd() + "…"
@@ -475,10 +526,14 @@ function QANode({
         top: node.y,
         transform: "translate(-50%,-50%)",
         width: NODE_W,
-        zIndex: selected ? 20 : 8,
-        filter: selected
+        zIndex: selected || isMultiSelected ? 20 : 8,
+        filter: isMultiSelected
+          ? `drop-shadow(0 0 0 3px #f59e0b) drop-shadow(0 4px 20px #f59e0b88)`
+          : selected
           ? `drop-shadow(0 4px 24px ${c}55)`
           : "drop-shadow(0 2px 8px #0002)",
+        outline: isMultiSelected ? "3px solid #f59e0b" : "none",
+        borderRadius: 14,
       }}
     >
       {/* header / drag handle */}
@@ -489,10 +544,14 @@ function QANode({
         }}
         onClick={(e) => {
           e.stopPropagation();
-          onSelect(node.id);
+          if (e.shiftKey) {
+            onMultiSelect(node.id);
+          } else {
+            onSelect(node.id);
+          }
         }}
         style={{
-          background: selected ? c : c + "ee",
+          background: isMultiSelected ? "#f59e0b" : selected ? c : c + "ee",
           borderRadius: "14px 14px 0 0",
           padding: "7px 12px 6px",
           cursor: "grab",
@@ -511,7 +570,7 @@ function QANode({
             textTransform: "uppercase",
           }}
         >
-          {isRoot ? "⬡ root" : isRoot ? "⬡ root" : "⬡ answer"}
+          {isRoot ? "⬡ root" : isMerge ? "⬡ merge" : "⬡ answer"}
         </span>
         <span
           style={{ fontSize: 10, color: "#ffffff88", fontFamily: "monospace" }}
@@ -553,7 +612,8 @@ function QANode({
       <div
         onClick={(e) => {
           e.stopPropagation();
-          onSelect(node.id);
+          if (e.shiftKey) onMultiSelect(node.id);
+          else onSelect(node.id);
         }}
         style={{
           background: "#fff",
@@ -855,6 +915,8 @@ export default function App() {
   const [scale, setScale] = useState(1);
   const [rootQ, setRootQ] = useState("");
   const [status, setStatus] = useState("");
+  const [multiSelected, setMultiSelected] = useState(new Set());
+  const [mergeDraft, setMergeDraft] = useState("");
 
   const isPanning = useRef(false);
   const panStart = useRef(null);
@@ -885,10 +947,33 @@ export default function App() {
       const ns = nodesRef.current;
       const node = ns[nodeId];
       if (!node) return;
-      const parent = node.parentId ? ns[node.parentId] : null;
-      // Resolve pronouns using parent context
-      const resolved = resolvePronouns(node.question, parent);
-      const context = getAncestorContext(ns, nodeId);
+
+      let resolved = node.question;
+      let context;
+
+      if (node.parentIds && node.parentIds.length > 1) {
+        // Merge node: collect context from all parent branches
+        const seen = new Set();
+        context = node.parentIds.flatMap((pid) => {
+          const parent = ns[pid];
+          if (!parent) return [];
+          const chain = getAncestorContext(ns, pid);
+          const entry = {
+            question: parent.resolvedQuestion || parent.question,
+            answer: parent.answer,
+          };
+          return [...chain, entry].filter((c) => {
+            if (seen.has(c.question)) return false;
+            seen.add(c.question);
+            return true;
+          });
+        });
+      } else {
+        const parent = node.parentId ? ns[node.parentId] : null;
+        resolved = resolvePronouns(node.question, parent);
+        context = getAncestorContext(ns, nodeId);
+      }
+
       setNodes((p) => ({
         ...p,
         [nodeId]: {
@@ -991,6 +1076,55 @@ export default function App() {
     [askNode],
   );
 
+  const addMergeChild = useCallback(
+    (parentIds, question) => {
+      if (!question.trim() || parentIds.length < 2) return;
+      const cid = uid();
+      setNodes((prev) => {
+        const parents = parentIds.map((id) => prev[id]).filter(Boolean);
+        if (parents.length < 2) return prev;
+        const maxDepth = Math.max(...parents.map((p) => p.depth));
+        const cx = parents.reduce((s, p) => s + p.x, 0) / parents.length;
+        const cy = parents.reduce((s, p) => s + p.y, 0) / parents.length;
+        const child = {
+          id: cid,
+          question: question.trim(),
+          resolvedQuestion: null,
+          answer: null,
+          error: null,
+          loading: false,
+          depth: maxDepth + 1,
+          x: cx,
+          y: cy + 320,
+          parentId: null,
+          parentIds,
+          children: [],
+        };
+        const updated = { ...prev, [cid]: child };
+        parentIds.forEach((pid) => {
+          if (updated[pid]) {
+            updated[pid] = {
+              ...updated[pid],
+              children: [...updated[pid].children, cid],
+            };
+          }
+        });
+        return updated;
+      });
+      setTimeout(() => askNode(cid), 60);
+    },
+    [askNode],
+  );
+
+  const onMultiSelect = useCallback((id) => {
+    setMultiSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const retryNode = useCallback((id) => askNode(id), [askNode]);
 
   const deleteNode = useCallback(
@@ -999,15 +1133,23 @@ export default function App() {
         const n = prev[id];
         if (!n || n.depth === 0) return prev;
         const updated = { ...prev };
-        if (updated[n.parentId])
-          updated[n.parentId] = {
-            ...updated[n.parentId],
-            children: updated[n.parentId].children.filter((c) => c !== id),
-          };
+        const parentIds = n.parentIds || (n.parentId ? [n.parentId] : []);
+        parentIds.forEach((pid) => {
+          if (updated[pid])
+            updated[pid] = {
+              ...updated[pid],
+              children: updated[pid].children.filter((c) => c !== id),
+            };
+        });
         removeSubtree(updated, id);
         return updated;
       });
       if (selectedId === id) setSelectedId(null);
+      setMultiSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     },
     [selectedId],
   );
@@ -1110,7 +1252,18 @@ export default function App() {
   }, []);
 
   const nodeList = Object.values(nodes);
-  const lines = nodeList.filter((n) => n.parentId && nodes[n.parentId]);
+  // Build flat edge list — merge nodes produce one edge per parent
+  const edges = nodeList.flatMap((n) => {
+    if (n.parentIds && n.parentIds.length > 1) {
+      return n.parentIds
+        .filter((pid) => nodes[pid])
+        .map((pid, i) => ({ child: n, parent: nodes[pid], isFirst: i === 0 }));
+    }
+    if (n.parentId && nodes[n.parentId]) {
+      return [{ child: n, parent: nodes[n.parentId], isFirst: true }];
+    }
+    return [];
+  });
   const hasNodes = nodeList.length > 0;
 
   return (
@@ -1239,6 +1392,17 @@ export default function App() {
               fit view
             </button>
             <button
+              onClick={() => setNodes((prev) => circularLayout(prev))}
+              style={{
+                ...gBtn,
+                color: "#2563eb",
+                borderColor: "#dbeafe",
+                background: "#eff6ff",
+              }}
+            >
+              ⊙ arrange
+            </button>
+            <button
               onClick={() => exportHTML(nodes)}
               style={{
                 ...gBtn,
@@ -1280,7 +1444,7 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          drag header → move · drag canvas → pan · scroll → zoom
+          drag header → move · drag canvas → pan · scroll → zoom · shift+click nodes → merge ask
         </span>
       </div>
 
@@ -1375,55 +1539,56 @@ export default function App() {
                 </marker>
               ))}
             </defs>
-            {lines.map((n) => {
-              const p = nodes[n.parentId];
+            {edges.map(({ child: n, parent: p, isFirst }) => {
               const c = col(n.depth);
               const ci = Math.min(n.depth, BRANCH_COLORS.length - 1);
               const isSel = n.id === selectedId;
+              const isMergeEdge = n.parentIds && n.parentIds.length > 1;
               const mid = edgeMid(p.x, p.y, n.x, n.y);
-              // Stroke width tapers with depth
               const sw = Math.max(1.5, 5 - n.depth * 1.2);
-              // Show resolved question on edge
               const edgeLabel = n.resolvedQuestion || n.question;
               const lw = Math.min(Math.max(edgeLabel.length * 6, 80), 320);
               return (
-                <g key={"eg-" + n.id}>
+                <g key={"eg-" + n.id + "-" + p.id}>
                   <path
                     d={branchPath(p.x, p.y, n.x, n.y)}
                     fill="none"
-                    stroke={isSel ? c : c + (isSel ? "ee" : "99")}
+                    stroke={isSel ? c : c + "99"}
                     strokeWidth={isSel ? sw + 1 : sw}
                     strokeLinecap="round"
+                    strokeDasharray={isMergeEdge ? "7 4" : undefined}
                     markerEnd={`url(#arr${ci})`}
                   />
-                  {/* edge label */}
-                  <foreignObject
-                    x={mid.x - lw / 2}
-                    y={mid.y - 14}
-                    width={lw}
-                    height={200}
-                    style={{ overflow: "visible" }}
-                  >
-                    <div
-                      style={{
-                        background: "#fff",
-                        border: `2px solid ${c}`,
-                        borderRadius: 8,
-                        color: c,
-                        fontSize: 10,
-                        fontFamily: "Nunito,sans-serif",
-                        fontWeight: 700,
-                        padding: "4px 8px",
-                        textAlign: "center",
-                        lineHeight: 1.6,
-                        wordBreak: "break-word",
-                        whiteSpace: "normal",
-                        boxShadow: `0 2px 8px ${c}33`,
-                      }}
+                  {/* show edge label only once per node */}
+                  {isFirst && (
+                    <foreignObject
+                      x={mid.x - lw / 2}
+                      y={mid.y - 14}
+                      width={lw}
+                      height={200}
+                      style={{ overflow: "visible" }}
                     >
-                      {edgeLabel}
-                    </div>
-                  </foreignObject>
+                      <div
+                        style={{
+                          background: "#fff",
+                          border: `2px solid ${isMergeEdge ? "#f59e0b" : c}`,
+                          borderRadius: 8,
+                          color: isMergeEdge ? "#f59e0b" : c,
+                          fontSize: 10,
+                          fontFamily: "Nunito,sans-serif",
+                          fontWeight: 700,
+                          padding: "4px 8px",
+                          textAlign: "center",
+                          lineHeight: 1.6,
+                          wordBreak: "break-word",
+                          whiteSpace: "normal",
+                          boxShadow: `0 2px 8px ${isMergeEdge ? "#f59e0b" : c}33`,
+                        }}
+                      >
+                        {edgeLabel}
+                      </div>
+                    </foreignObject>
+                  )}
                 </g>
               );
             })}
@@ -1436,7 +1601,9 @@ export default function App() {
                 key={n.id}
                 node={n}
                 selected={n.id === selectedId}
+                isMultiSelected={multiSelected.has(n.id)}
                 onSelect={setSelectedId}
+                onMultiSelect={onMultiSelect}
                 onStartDrag={startNodeDrag}
                 onAddChild={addChild}
                 onDelete={deleteNode}
@@ -1475,6 +1642,112 @@ export default function App() {
               <br />
               Branch from any answer to explore deeper.
             </div>
+          </div>
+        )}
+
+        {/* merge panel — shown when 2+ nodes are shift-selected */}
+        {multiSelected.size >= 2 && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: 24,
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 200,
+              background: "#fff",
+              border: "2px solid #f59e0b",
+              borderRadius: 14,
+              boxShadow: "0 8px 32px #f59e0b44",
+              padding: "12px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              minWidth: 420,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "#f59e0b",
+                whiteSpace: "nowrap",
+              }}
+            >
+              ⬡ merge {multiSelected.size} nodes
+            </span>
+            <input
+              autoFocus
+              value={mergeDraft}
+              onChange={(e) => setMergeDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  addMergeChild([...multiSelected], mergeDraft);
+                  setMultiSelected(new Set());
+                  setMergeDraft("");
+                }
+                if (e.key === "Escape") {
+                  setMultiSelected(new Set());
+                  setMergeDraft("");
+                }
+                e.stopPropagation();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              placeholder="Ask a question combining these nodes…"
+              style={{
+                flex: 1,
+                background: "#fffbeb",
+                border: "1.5px solid #f59e0b88",
+                color: "#1a1a2e",
+                fontFamily: "Nunito,sans-serif",
+                fontSize: 13,
+                padding: "6px 11px",
+                borderRadius: 8,
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                addMergeChild([...multiSelected], mergeDraft);
+                setMultiSelected(new Set());
+                setMergeDraft("");
+              }}
+              disabled={!mergeDraft.trim()}
+              style={{
+                background: mergeDraft.trim() ? "#f59e0b" : "#eee",
+                color: mergeDraft.trim() ? "#fff" : "#bbb",
+                border: "none",
+                borderRadius: 8,
+                fontFamily: "Nunito,sans-serif",
+                fontSize: 12,
+                fontWeight: 700,
+                padding: "6px 14px",
+                cursor: mergeDraft.trim() ? "pointer" : "default",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Ask ✦
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMultiSelected(new Set());
+                setMergeDraft("");
+              }}
+              style={{
+                background: "transparent",
+                border: "1.5px solid #f59e0b88",
+                color: "#f59e0b",
+                borderRadius: 8,
+                fontFamily: "Nunito,sans-serif",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "5px 10px",
+                cursor: "pointer",
+              }}
+            >
+              clear
+            </button>
           </div>
         )}
 
